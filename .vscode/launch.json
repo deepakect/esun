@@ -1,0 +1,30 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+      {
+        //"preLaunchTask": "preRun",
+        "name": "ESP32C3",
+        "type": "cppdbg",
+        "request": "launch",
+        "MIMode": "gdb",
+        "miDebuggerPath": "C:/Users/deepa/.espressif/tools/riscv32-esp-elf-gdb/12.1_20221002/riscv32-esp-elf-gdb/bin/riscv32-esp-elf-gdb.exe",
+        "program": "${workspaceFolder}//build//esun.elf",
+        /*"windows": {
+          "program": "${workspaceFolder}//build//esun.elf"
+        },*/
+        "cwd": "${workspaceFolder}",
+        "environment": [{ "name": "PATH", "value": "${config:idf.customExtraPaths}" }],
+        "setupCommands": [
+          { "text": "target remote 127.0.0.1:3333" },
+          { "text": "set remote hardware-watchpoint-limit 2"},
+          { "text": "mon reset halt" },
+          { "text": "thb app_main" },
+          { "text": "flushregs" }
+        ],
+        "externalConsole": false,
+        "logging": {
+          "engineLogging": true
+        }
+      }
+    ]
+  }

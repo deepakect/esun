@@ -1,0 +1,12 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"type": "shell",
+			"label": "preRun",
+			"windows" : {
+			"command": "clear & start openocd -c \"set ESP_RTOS none\"-f Board/esp32c3-builtin.cfg & exit"
+			}
+		}
+	]
+}

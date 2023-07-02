@@ -29,7 +29,7 @@
 
 #if CONFIG_IDF_TARGET_ESP32C3 || CONFIG_IDF_TARGET_ESP32S3 ||                  \
     CONFIG_IDF_TARGET_ESP32H2 || CONFIG_IDF_TARGET_ESP32C2
-extern adc_channel_t channel[3];
+extern adc_channel_t channel;
 #endif
 #if CONFIG_IDF_TARGET_ESP32S2
 extern adc_channel_t channel[3];

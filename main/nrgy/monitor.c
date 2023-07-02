@@ -2,11 +2,18 @@
 #include "esp_log.h"
 #include "sdkconfig.h"
 #include "cmn/cmn.h"
-
+//#include "freertos/timers.h"
+#include "driver/gpio.h"
 #include "monitor.h"
 
 static TaskHandle_t adc_task_hndl;
 static const char *TAG = "NRGY:MONITOR";
+
+#define RELAY_PIN  GPIO_NUM_3   //Relay pin location
+bool replay_position = 0;       //Varible to check relay position, use extern to access it elsewhere
+#define TURN_ON_RELAY gpio_set_level(RELAY_PIN, 1)
+#define TURN_OFF_RELAY  gpio_set_level(RELAY_PIN, 0)
+
 
 /* callback */
 static bool IRAM_ATTR adc_cb_conversion(adc_continuous_handle_t hndl,
@@ -31,7 +38,7 @@ static void continuous_adc_init(adc_channel_t *channel, uint8_t channel_num,
   ESP_ERROR_CHECK(adc_continuous_new_handle(&adc_config, &handle));
 
   adc_continuous_config_t dig_cfg = {
-      .sample_freq_hz = 20 * 1000,
+      .sample_freq_hz = 100,       //Changing sampling freq to 1k, since 20k not needed
       .conv_mode = ADC_CONV_MODE,
       .format = ADC_OUTPUT_TYPE,
   };
@@ -41,7 +48,7 @@ static void continuous_adc_init(adc_channel_t *channel, uint8_t channel_num,
   for (int i = 0; i < channel_num; i++) {
     uint8_t unit = GET_UNIT(channel[i]);
     uint8_t ch = channel[i] & 0x7;
-    adc_pattern[i].atten = ADC_ATTEN_DB_0;
+    adc_pattern[i].atten = ADC_ATTEN_DB_11;
     adc_pattern[i].channel = ch;
     adc_pattern[i].unit = unit;
     adc_pattern[i].bit_width = SOC_ADC_DIGI_MAX_BITWIDTH;
@@ -68,16 +75,56 @@ static bool check_valid_data(const adc_digi_output_data_t *data) {
 }
 #endif
 
+//Software timer callback, this timer can be used for ADC timer
+void TimerExpiredActionCallback(TimerHandle_t xTimer)
+{
+	//Action to be takes when timer expires
+	int i = 100;
+	while (i)
+		i--;
+}
+
 void monitor_main(void) {
   esp_err_t ret;
   uint32_t ret_num = 0;
   uint8_t result[EXAMPLE_READ_LEN] = {0};
+
+  //Create a timer for ADC to run till that time
+  TimerHandle_t timerHandleADC;
   memset(result, 0xcc, EXAMPLE_READ_LEN);
+
+
+  timerHandleADC = xTimerCreate("ADCTimer", pdMS_TO_TICKS(1000), pdFALSE,    //NO AUTO RELOAD, its one shot
+    (void*)0,
+    TimerExpiredActionCallback  //Callback for after timer expiry
+  );
+
+  if(timerHandleADC == NULL)
+  {
+    ESP_LOGI(TAG, "Timer Creation failed");
+    while(1);
+
+  }
+
+  xTimerStart(timerHandleADC,0);
+  //Init Relay GPIO as OUTPUT mode
+  gpio_set_direction(RELAY_PIN, GPIO_MODE_OUTPUT);
+  if (gpio_get_level(RELAY_PIN) == 0)
+	{
+		ESP_LOGI(TAG, "Relay is OFF");
+    replay_position = 0;    //gpio_get_level API few clock cycles to read, lets read once and preserve value, untill unless needed to read it again
+	}
+	    
+	else
+	{
+		ESP_LOGI(TAG, "Relay is ON");
+    replay_position = 1;
+	}
 
   adc_task_hndl = xTaskGetCurrentTaskHandle();
 
   adc_continuous_handle_t handle = NULL;
-  continuous_adc_init(channel, sizeof(channel) / sizeof(adc_channel_t),
+  continuous_adc_init(&channel, sizeof(channel) / sizeof(adc_channel_t),
                       &handle);
 
   adc_continuous_evt_cbs_t cbs = {
@@ -85,7 +132,7 @@ void monitor_main(void) {
   };
   ESP_ERROR_CHECK(adc_continuous_register_event_callbacks(handle, &cbs, NULL));
   ESP_ERROR_CHECK(adc_continuous_start(handle));
-
+  TURN_ON_RELAY;
   while (1) {
 
     /**
@@ -113,8 +160,8 @@ void monitor_main(void) {
           if (ADC_CONV_MODE == ADC_CONV_BOTH_UNIT ||
               ADC_CONV_MODE == ADC_CONV_ALTER_UNIT) {
             if (check_valid_data(p)) {
-              ESP_LOGI(TAG, "Unit: %d,_Channel: %d, Value: %x",
-                       p->type2.unit + 1, p->type2.channel, p->type2.data);
+              ESP_LOGI(TAG, "Unit: %d,_Channel: %d, Value: %x, Analog Vaue : %d",
+                       p->type2.unit + 1, p->type2.channel, p->type2.data, (int)(p->type2.data/1.444));
             } else {
               ESP_LOGI(TAG, "Invalid data [%d_%d_%x]", p->type2.unit + 1,
                        p->type2.channel, p->type2.data);

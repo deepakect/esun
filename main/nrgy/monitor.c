@@ -38,7 +38,7 @@ static void continuous_adc_init(adc_channel_t *channel, uint8_t channel_num,
   ESP_ERROR_CHECK(adc_continuous_new_handle(&adc_config, &handle));
 
   adc_continuous_config_t dig_cfg = {
-      .sample_freq_hz = 100,       //Changing sampling freq to 1k, since 20k not needed
+      .sample_freq_hz = 1000,       //Changing sampling freq to 1k, since 20k not needed
       .conv_mode = ADC_CONV_MODE,
       .format = ADC_OUTPUT_TYPE,
   };

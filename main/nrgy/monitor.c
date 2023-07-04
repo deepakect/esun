@@ -2,7 +2,8 @@
 #include "esp_log.h"
 #include "sdkconfig.h"
 #include "cmn/cmn.h"
-// #include "freertos/timers.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/timers.h"
 #include "driver/gpio.h"
 #include "monitor.h"
 
@@ -14,6 +15,7 @@ bool replay_position = 0;    // Varible to check relay position, use extern to a
 #define TURN_ON_RELAY gpio_set_level(RELAY_PIN, 1)
 #define TURN_OFF_RELAY gpio_set_level(RELAY_PIN, 0)
 bool exit_adc_loop;
+static adc_continuous_handle_t handle = NULL; // keep scope limited
 
 /* callback */
 static bool IRAM_ATTR adc_cb_conversion(adc_continuous_handle_t hndl,
@@ -31,7 +33,6 @@ static bool IRAM_ATTR adc_cb_conversion(adc_continuous_handle_t hndl,
 static void continuous_adc_init(adc_channel_t *channel, uint8_t channel_num,
                                 adc_continuous_handle_t *out_handle)
 {
-  adc_continuous_handle_t handle = NULL;
 
   adc_continuous_handle_cfg_t adc_config = {
       .max_store_buf_size = 1024,
@@ -80,9 +81,13 @@ static bool check_valid_data(const adc_digi_output_data_t *data)
 #endif
 
 // Software timer callback, this timer can be used for ADC timer
-void TimerExpiredActionCallback(TimerHandle_t xTimer)
+static void TimerExpiredActionCallback(TimerHandle_t xTimer)
 {
-  TURN_OFF_RELAY;
+  if (replay_position)
+  {
+    TURN_OFF_RELAY;
+    ESP_LOGI(TAG, "Relay off!");
+  }
   // Action to be takes when timer expires
   // Stop ADC
   adc_continuous_stop(handle);
@@ -140,7 +145,11 @@ void monitor_main(void)
   };
   ESP_ERROR_CHECK(adc_continuous_register_event_callbacks(handle, &cbs, NULL));
   ESP_ERROR_CHECK(adc_continuous_start(handle));
-  TURN_ON_RELAY;
+  if (!replay_position)
+  {
+    TURN_ON_RELAY;
+    ESP_LOGI("Relay ON!");
+  }
   while (1)
   {
 
@@ -218,4 +227,6 @@ void monitor_main(void)
 
   ESP_ERROR_CHECK(adc_continuous_stop(handle));
   ESP_ERROR_CHECK(adc_continuous_deinit(handle));
+  while (1)
+    ;
 }

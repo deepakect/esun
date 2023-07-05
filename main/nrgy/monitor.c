@@ -10,17 +10,17 @@ static const char *TAG = "NRGY:MONITOR";
 
 #define RELAY_PIN GPIO_NUM_3 // Relay pin location
 bool replay_position = 0;    // Varible to check relay position, use extern to access it elsewhere
-#define TURN_ON_RELAY gpio_set_level(RELAY_PIN, 1)
-#define TURN_OFF_RELAY gpio_set_level(RELAY_PIN, 0)
+#define TURN_ON_RELAY gpio_set_level(RELAY_PIN, 1); ESP_LOGI(TAG,"Relay ON!")
+#define TURN_OFF_RELAY gpio_set_level(RELAY_PIN, 0);ESP_LOGI(TAG,"Relay OFF!")
 bool exit_adc_loop;
 
 #define EXAMPLE_ADC1_CHAN0          ADC_CHANNEL_2
-
-static int adc_raw[2][10];
-static int voltage[2][10];
+#define ADC_CALI_SCHEME_CURVE_FITTING_SUPPORTED 1
+static float ACSZeroCurrentReading;
 static bool example_adc_calibration_init(adc_unit_t unit, adc_atten_t atten, adc_cali_handle_t *out_handle);
 static void example_adc_calibration_deinit(adc_cali_handle_t handle);
 static float Current_consumed = 0;
+static float PresentConsumption = 0;
 uint32_t time_to_run;
 
 // Software timer callback, this timer can be used for ADC timer
@@ -29,7 +29,6 @@ static void TimerExpiredActionCallback(TimerHandle_t xTimer)
   if (replay_position)
   {
     TURN_OFF_RELAY;
-    ESP_LOGI(TAG, "Relay off!");
   }
   // Action to be takes when timer expires
   // Stop ADC
@@ -43,7 +42,9 @@ static void TimerExpiredActionCallback(TimerHandle_t xTimer)
 
 void monitor_main(void)
 {
-
+  static int adc_raw_avg;
+  static int adc_voltage;
+  int temp_value;
   time_to_run =  15 * 60 * 1000; //make minutes to milli-seconds
 
   // Create a timer for ADC to run till that time
@@ -66,13 +67,13 @@ void monitor_main(void)
   gpio_set_direction(RELAY_PIN, GPIO_MODE_OUTPUT);
   if (gpio_get_level(RELAY_PIN) == 0)
   {
-    ESP_LOGI(TAG, "Relay is OFF");
+    ESP_LOGI(TAG, "Status : Relay is OFF");
     replay_position = 0; // gpio_get_level API few clock cycles to read, lets read once and preserve value, untill unless needed to read it again
   }
 
   else
   {
-    ESP_LOGI(TAG, "Relay is ON");
+    ESP_LOGI(TAG, "Status : Relay is ON");
     replay_position = 1;
   }
 
@@ -87,32 +88,72 @@ void monitor_main(void)
 
   //-------------ADC1 Config---------------//
   adc_oneshot_chan_cfg_t config = {
-      .bitwidth = ADC_BITWIDTH_DEFAULT,
+      .bitwidth = ADC_BITWIDTH_12, //ADC_BITWIDTH_DEFAULT,
       .atten = ADC_ATTEN_DB_11,
   };
   ESP_ERROR_CHECK(adc_oneshot_config_channel(adc1_handle, EXAMPLE_ADC1_CHAN0, &config));
 
   adc_cali_handle_t adc1_cali_handle = NULL;
   bool do_calibration1 = example_adc_calibration_init(ADC_UNIT_1, ADC_ATTEN_DB_11, &adc1_cali_handle);
-
+  //Calculate chip supply voltage
+  if (!replay_position)
+  {
+    ESP_ERROR_CHECK(adc_oneshot_read(adc1_handle, EXAMPLE_ADC1_CHAN0, &temp_value));
+    adc_raw_avg = temp_value;
+    temp_value = 0;
+    ESP_ERROR_CHECK(adc_oneshot_read(adc1_handle, EXAMPLE_ADC1_CHAN0, &temp_value));
+    adc_raw_avg += temp_value;
+    temp_value = 0;
+    ESP_ERROR_CHECK(adc_oneshot_read(adc1_handle, EXAMPLE_ADC1_CHAN0, &temp_value));
+    adc_raw_avg += temp_value;
+    temp_value = 0;
+    ESP_ERROR_CHECK(adc_oneshot_read(adc1_handle, EXAMPLE_ADC1_CHAN0, &temp_value));
+    adc_raw_avg += temp_value;
+    temp_value = 0;
+    ESP_ERROR_CHECK(adc_oneshot_read(adc1_handle, EXAMPLE_ADC1_CHAN0, &temp_value));
+    adc_raw_avg += temp_value;
+    temp_value = 0;
+    adc_raw_avg = adc_raw_avg / 5;
+    ESP_ERROR_CHECK(adc_cali_raw_to_voltage(adc1_cali_handle, adc_raw_avg, &adc_voltage));
+    ACSZeroCurrentReading = (float)adc_voltage;
+    ESP_LOGI(TAG, "ACS supply voltage %.2f Volts", ACSZeroCurrentReading/(float)100);
+  }
   if (!replay_position)
   {
     TURN_ON_RELAY;
-    ESP_LOGI(TAG,"Relay ON!");
   }
   while (!exit_adc_loop)
   {
-    ESP_ERROR_CHECK(adc_oneshot_read(adc1_handle, EXAMPLE_ADC1_CHAN0, &adc_raw[0][0]));
-    //ESP_LOGI(TAG, "ADC%d Channel[%d] Raw Data: %d", ADC_UNIT_1 + 1, EXAMPLE_ADC1_CHAN0, adc_raw[0][0]);
+    ESP_ERROR_CHECK(adc_oneshot_read(adc1_handle, EXAMPLE_ADC1_CHAN0, &temp_value));
+    adc_raw_avg = temp_value;
+    temp_value = 0;
+    ESP_ERROR_CHECK(adc_oneshot_read(adc1_handle, EXAMPLE_ADC1_CHAN0, &temp_value));
+    adc_raw_avg += temp_value;
+    temp_value = 0;
+    ESP_ERROR_CHECK(adc_oneshot_read(adc1_handle, EXAMPLE_ADC1_CHAN0, &temp_value));
+    adc_raw_avg += temp_value;
+    temp_value = 0;
+    ESP_ERROR_CHECK(adc_oneshot_read(adc1_handle, EXAMPLE_ADC1_CHAN0, &temp_value));
+    adc_raw_avg += temp_value;
+    temp_value = 0;
+    ESP_ERROR_CHECK(adc_oneshot_read(adc1_handle, EXAMPLE_ADC1_CHAN0, &temp_value));
+    adc_raw_avg += temp_value;
+    temp_value = 0;
+    adc_raw_avg = adc_raw_avg/5;
    #if 1
     if (do_calibration1)
     {
-      ESP_ERROR_CHECK(adc_cali_raw_to_voltage(adc1_cali_handle, adc_raw[0][0], &voltage[0][0]));
-       // Current_consumed += (230 * (float)voltage[0][0] / (float)200) / (long)(3600000000);
-       Current_consumed += (float)((float)250 * 4 / (float)1000);
-       //if(Current_consumed == 100 || Current_consumed == 250 || Current_consumed == 500 || Current_consumed == 750 )
-       ESP_LOGI(TAG,"%.2f kWs", Current_consumed);
-      //ESP_LOGI(TAG, "ADC%d Channel[%d] Cali Voltage: %d mV, current: %2.4f Amps", ADC_UNIT_1 + 1, EXAMPLE_ADC1_CHAN0, voltage[0][0], Current_consumed);
+      ESP_ERROR_CHECK(adc_cali_raw_to_voltage(adc1_cali_handle, adc_raw_avg, &adc_voltage));
+      if ((adc_voltage - ACSZeroCurrentReading) < 0)
+      {
+        PresentConsumption = 0;
+      }
+      else
+      {
+        PresentConsumption = (230 * ((float)(adc_voltage - ACSZeroCurrentReading) / (float)200) / (float)1000);
+      }
+      Current_consumed += PresentConsumption; //(230 * ((float)(adc_voltage  - ACSZeroCurrentReading)/(float)200) / (float)1000);
+       ESP_LOGI(TAG,"Total Consumption %.2f kWs , Present consumption : %.2f Watts", Current_consumed, PresentConsumption);
     }
     #endif
         vTaskDelay(1000);
@@ -132,7 +173,7 @@ static bool example_adc_calibration_init(adc_unit_t unit, adc_atten_t atten, adc
         adc_cali_curve_fitting_config_t cali_config = {
             .unit_id = unit,
             .atten = atten,
-            .bitwidth = ADC_BITWIDTH_DEFAULT,
+            .bitwidth = ADC_BITWIDTH_12, //ADC_BITWIDTH_DEFAULT,
         };
         ret = adc_cali_create_scheme_curve_fitting(&cali_config, &handle);
         if (ret == ESP_OK) {

@@ -2,8 +2,6 @@
 #include "esp_log.h"
 #include "sdkconfig.h"
 #include "cmn/cmn.h"
-#include "freertos/FreeRTOS.h"
-#include "freertos/timers.h"
 #include "driver/gpio.h"
 #include "monitor.h"
 
@@ -15,70 +13,15 @@ bool replay_position = 0;    // Varible to check relay position, use extern to a
 #define TURN_ON_RELAY gpio_set_level(RELAY_PIN, 1)
 #define TURN_OFF_RELAY gpio_set_level(RELAY_PIN, 0)
 bool exit_adc_loop;
-static adc_continuous_handle_t handle = NULL; // keep scope limited
 
-/* callback */
-static bool IRAM_ATTR adc_cb_conversion(adc_continuous_handle_t hndl,
-                                        const adc_continuous_evt_data_t *data,
-                                        void *usrdata)
-{
-  BaseType_t isYield = pdFALSE;
+#define EXAMPLE_ADC1_CHAN0          ADC_CHANNEL_2
 
-  /* Conversion is done, notify the driver */
-  vTaskNotifyGiveFromISR(adc_task_hndl, &isYield);
-
-  return (isYield == pdTRUE);
-}
-
-static void continuous_adc_init(adc_channel_t *channel, uint8_t channel_num,
-                                adc_continuous_handle_t *out_handle)
-{
-
-  adc_continuous_handle_cfg_t adc_config = {
-      .max_store_buf_size = 1024,
-      .conv_frame_size = EXAMPLE_READ_LEN,
-  };
-  ESP_ERROR_CHECK(adc_continuous_new_handle(&adc_config, &handle));
-
-  adc_continuous_config_t dig_cfg = {
-      .sample_freq_hz = 1000, // Changing sampling freq to 1k, since 20k not needed
-      .conv_mode = ADC_CONV_MODE,
-      .format = ADC_OUTPUT_TYPE,
-  };
-
-  adc_digi_pattern_config_t adc_pattern[SOC_ADC_PATT_LEN_MAX] = {0};
-  dig_cfg.pattern_num = channel_num;
-  for (int i = 0; i < channel_num; i++)
-  {
-    uint8_t unit = GET_UNIT(channel[i]);
-    uint8_t ch = channel[i] & 0x7;
-    adc_pattern[i].atten = ADC_ATTEN_DB_11;
-    adc_pattern[i].channel = ch;
-    adc_pattern[i].unit = unit;
-    adc_pattern[i].bit_width = SOC_ADC_DIGI_MAX_BITWIDTH;
-
-    ESP_LOGI(TAG, "adc_pattern[%d].atten is :%x", i, adc_pattern[i].atten);
-    ESP_LOGI(TAG, "adc_pattern[%d].channel is :%x", i, adc_pattern[i].channel);
-    ESP_LOGI(TAG, "adc_pattern[%d].unit is :%x", i, adc_pattern[i].unit);
-  }
-  dig_cfg.adc_pattern = adc_pattern;
-  ESP_ERROR_CHECK(adc_continuous_config(handle, &dig_cfg));
-  exit_adc_loop = 0; // enable loop exit mechanism
-  *out_handle = handle;
-}
-
-#if !CONFIG_IDF_TARGET_ESP32
-static bool check_valid_data(const adc_digi_output_data_t *data)
-{
-  const unsigned int unit = data->type2.unit;
-  if (unit > 2)
-    return false;
-  if (data->type2.channel >= SOC_ADC_CHANNEL_NUM(unit))
-    return false;
-
-  return true;
-}
-#endif
+static int adc_raw[2][10];
+static int voltage[2][10];
+static bool example_adc_calibration_init(adc_unit_t unit, adc_atten_t atten, adc_cali_handle_t *out_handle);
+static void example_adc_calibration_deinit(adc_cali_handle_t handle);
+static float Current_consumed = 0;
+uint32_t time_to_run;
 
 // Software timer callback, this timer can be used for ADC timer
 static void TimerExpiredActionCallback(TimerHandle_t xTimer)
@@ -90,24 +33,23 @@ static void TimerExpiredActionCallback(TimerHandle_t xTimer)
   }
   // Action to be takes when timer expires
   // Stop ADC
-  adc_continuous_stop(handle);
+  //adc_continuous_stop(handle);
   ESP_LOGI(TAG, "ADC Sampling stopped");
   // stop adc loop
   exit_adc_loop = 1;
+  ESP_LOGI(TAG, "Power consumed : %.4f kWhr", Current_consumed/(float)3600);
   // proceed for adc calculation
 }
 
 void monitor_main(void)
 {
-  esp_err_t ret;
-  uint32_t ret_num = 0;
-  uint8_t result[EXAMPLE_READ_LEN] = {0};
+
+  time_to_run =  15 * 60 * 1000; //make minutes to milli-seconds
 
   // Create a timer for ADC to run till that time
   TimerHandle_t timerHandleADC;
-  memset(result, 0xcc, EXAMPLE_READ_LEN);
 
-  timerHandleADC = xTimerCreate("ADCTimer", pdMS_TO_TICKS(1000), pdFALSE, // NO AUTO RELOAD, its one shot
+  timerHandleADC = xTimerCreate("ADCTimer", pdMS_TO_TICKS(time_to_run), pdFALSE, // NO AUTO RELOAD, its one shot
                                 (void *)0,
                                 TimerExpiredActionCallback // Callback for after timer expiry
   );
@@ -136,97 +78,104 @@ void monitor_main(void)
 
   adc_task_hndl = xTaskGetCurrentTaskHandle();
 
-  adc_continuous_handle_t handle = NULL;
-  continuous_adc_init(&channel, sizeof(channel) / sizeof(adc_channel_t),
-                      &handle);
-
-  adc_continuous_evt_cbs_t cbs = {
-      .on_conv_done = adc_cb_conversion,
+  //-------------ADC1 Init---------------//
+  adc_oneshot_unit_handle_t adc1_handle;
+  adc_oneshot_unit_init_cfg_t init_config1 = {
+      .unit_id = ADC_UNIT_1,
   };
-  ESP_ERROR_CHECK(adc_continuous_register_event_callbacks(handle, &cbs, NULL));
-  ESP_ERROR_CHECK(adc_continuous_start(handle));
+  ESP_ERROR_CHECK(adc_oneshot_new_unit(&init_config1, &adc1_handle));
+
+  //-------------ADC1 Config---------------//
+  adc_oneshot_chan_cfg_t config = {
+      .bitwidth = ADC_BITWIDTH_DEFAULT,
+      .atten = ADC_ATTEN_DB_11,
+  };
+  ESP_ERROR_CHECK(adc_oneshot_config_channel(adc1_handle, EXAMPLE_ADC1_CHAN0, &config));
+
+  adc_cali_handle_t adc1_cali_handle = NULL;
+  bool do_calibration1 = example_adc_calibration_init(ADC_UNIT_1, ADC_ATTEN_DB_11, &adc1_cali_handle);
+
   if (!replay_position)
   {
     TURN_ON_RELAY;
-    ESP_LOGI("Relay ON!");
+    ESP_LOGI(TAG,"Relay ON!");
   }
-  while (1)
+  while (!exit_adc_loop)
   {
-
-    /**
-     * This is to show you the way to use the ADC continuous mode driver event
-     * callback. This `ulTaskNotifyTake` will block when the data processing in
-     * the task is fast. However in this example, the data processing (print) is
-     * slow, so you barely block here.
-     *
-     * Without using this event callback (to notify this task), you can still
-     * just call `adc_continuous_read()` here in a loop, with/without a certain
-     * block timeout.
-     */
-    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-    if (exit_adc_loop == 1)
-      break;
-
-    while (!exit_adc_loop)
+    ESP_ERROR_CHECK(adc_oneshot_read(adc1_handle, EXAMPLE_ADC1_CHAN0, &adc_raw[0][0]));
+    //ESP_LOGI(TAG, "ADC%d Channel[%d] Raw Data: %d", ADC_UNIT_1 + 1, EXAMPLE_ADC1_CHAN0, adc_raw[0][0]);
+   #if 1
+    if (do_calibration1)
     {
-      ret = adc_continuous_read(handle, result, EXAMPLE_READ_LEN, &ret_num, 0);
-      if (ret == ESP_OK)
-      {
-        ESP_LOGI("TASK", "ret is %x, ret_num is %" PRIu32, ret, ret_num);
-        for (int i = 0; i < ret_num; i += SOC_ADC_DIGI_RESULT_BYTES)
-        {
-          adc_digi_output_data_t *p = (void *)&result[i];
-#if CONFIG_IDF_TARGET_ESP32
-          ESP_LOGI(TAG, "Unit: %d, Channel: %d, Value: %x", 1, p->type1.channel,
-                   p->type1.data);
-#else
-          if (ADC_CONV_MODE == ADC_CONV_BOTH_UNIT ||
-              ADC_CONV_MODE == ADC_CONV_ALTER_UNIT)
-          {
-            if (check_valid_data(p))
-            {
-              ESP_LOGI(TAG, "Unit: %d,_Channel: %d, Value: %x, Analog Vaue : %d",
-                       p->type2.unit + 1, p->type2.channel, p->type2.data, (int)(p->type2.data / 1.444));
-            }
-            else
-            {
-              ESP_LOGI(TAG, "Invalid data [%d_%d_%x]", p->type2.unit + 1,
-                       p->type2.channel, p->type2.data);
-            }
-          }
-#if CONFIG_IDF_TARGET_ESP32S2
-          else if (ADC_CONV_MODE == ADC_CONV_SINGLE_UNIT_2)
-          {
-            ESP_LOGI(TAG, "Unit: %d, Channel: %d, Value: %x", 2,
-                     p->type1.channel, p->type1.data);
-          }
-          else if (ADC_CONV_MODE == ADC_CONV_SINGLE_UNIT_1)
-          {
-            ESP_LOGI(TAG, "Unit: %d, Channel: %d, Value: %x", 1,
-                     p->type1.channel, p->type1.data);
-          }
-#endif // #if CONFIG_IDF_TARGET_ESP32S2
-#endif
-        }
-        /**
-         * Because printing is slow, so every time you call `ulTaskNotifyTake`,
-         * it will immediately return. To avoid a task watchdog timeout, add a
-         * delay here. When you replace the way you process the data, usually
-         * you don't need this delay (as this task will block for a while).
-         */
-        vTaskDelay(1);
-      }
-      else if (ret == ESP_ERR_TIMEOUT)
-      {
-        // We try to read `EXAMPLE_READ_LEN` until API returns timeout, which
-        // means there's no available data
-        break;
-      }
+      ESP_ERROR_CHECK(adc_cali_raw_to_voltage(adc1_cali_handle, adc_raw[0][0], &voltage[0][0]));
+       // Current_consumed += (230 * (float)voltage[0][0] / (float)200) / (long)(3600000000);
+       Current_consumed += (float)((float)250 * 4 / (float)1000);
+       //if(Current_consumed == 100 || Current_consumed == 250 || Current_consumed == 500 || Current_consumed == 750 )
+       ESP_LOGI(TAG,"%.2f kWs", Current_consumed);
+      //ESP_LOGI(TAG, "ADC%d Channel[%d] Cali Voltage: %d mV, current: %2.4f Amps", ADC_UNIT_1 + 1, EXAMPLE_ADC1_CHAN0, voltage[0][0], Current_consumed);
     }
+    #endif
+        vTaskDelay(1000);
   }
+}
 
-  ESP_ERROR_CHECK(adc_continuous_stop(handle));
-  ESP_ERROR_CHECK(adc_continuous_deinit(handle));
-  while (1)
-    ;
+
+static bool example_adc_calibration_init(adc_unit_t unit, adc_atten_t atten, adc_cali_handle_t *out_handle)
+{
+    adc_cali_handle_t handle = NULL;
+    esp_err_t ret = ESP_FAIL;
+    bool calibrated = false;
+
+#if ADC_CALI_SCHEME_CURVE_FITTING_SUPPORTED
+    if (!calibrated) {
+        ESP_LOGI(TAG, "calibration scheme version is %s", "Curve Fitting");
+        adc_cali_curve_fitting_config_t cali_config = {
+            .unit_id = unit,
+            .atten = atten,
+            .bitwidth = ADC_BITWIDTH_DEFAULT,
+        };
+        ret = adc_cali_create_scheme_curve_fitting(&cali_config, &handle);
+        if (ret == ESP_OK) {
+            calibrated = true;
+        }
+    }
+#endif
+
+#if ADC_CALI_SCHEME_LINE_FITTING_SUPPORTED
+    if (!calibrated) {
+        ESP_LOGI(TAG, "calibration scheme version is %s", "Line Fitting");
+        adc_cali_line_fitting_config_t cali_config = {
+            .unit_id = unit,
+            .atten = atten,
+            .bitwidth = ADC_BITWIDTH_DEFAULT,
+        };
+        ret = adc_cali_create_scheme_line_fitting(&cali_config, &handle);
+        if (ret == ESP_OK) {
+            calibrated = true;
+        }
+    }
+#endif
+
+    *out_handle = handle;
+    if (ret == ESP_OK) {
+        ESP_LOGI(TAG, "Calibration Success");
+    } else if (ret == ESP_ERR_NOT_SUPPORTED || !calibrated) {
+        ESP_LOGW(TAG, "eFuse not burnt, skip software calibration");
+    } else {
+        ESP_LOGE(TAG, "Invalid arg or no memory");
+    }
+
+    return calibrated;
+}
+
+static void example_adc_calibration_deinit(adc_cali_handle_t handle)
+{
+#if ADC_CALI_SCHEME_CURVE_FITTING_SUPPORTED
+    ESP_LOGI(TAG, "deregister %s calibration scheme", "Curve Fitting");
+    ESP_ERROR_CHECK(adc_cali_delete_scheme_curve_fitting(handle));
+
+#elif ADC_CALI_SCHEME_LINE_FITTING_SUPPORTED
+    ESP_LOGI(TAG, "deregister %s calibration scheme", "Line Fitting");
+    ESP_ERROR_CHECK(adc_cali_delete_scheme_line_fitting(handle));
+#endif
 }

@@ -8,6 +8,8 @@
 #include "ble/server.h"
 #include "nvs/nvs.h"
 
+int gtimerToRun = 60; //time in minutes
+
 void app_main(void)
 {
   /* Init nvs flash */
@@ -21,6 +23,6 @@ void app_main(void)
 
   wifi_sap_init();
 
-  monitor_main();
+  monitor_main(gtimerToRun);
 
 }

@@ -17,6 +17,6 @@
 #define EXAMPLE_READ_LEN   256
 #define GET_UNIT(x)        ((x>>3) & 0x1)
 
-void monitor_main(void);
+void monitor_main(int timerToRun);
 
 #endif // #ifndef __MONITOR_H

@@ -8,6 +8,7 @@
 #include "ble/server.h"
 #include "nvs/nvs.h"
 
+TaskHandle_t g_MonitorTaskHandle = NULL;
 int gtimerToRun = 60; //time in minutes
 
 void app_main(void)
@@ -23,6 +24,10 @@ void app_main(void)
 
   wifi_sap_init();
 
-  monitor_main(gtimerToRun);
+  //Create monitor task
+  xTaskCreate(monitor_main, "MONITOR_TASK", 2000, (void*) gtimerToRun, tskIDLE_PRIORITY, &g_MonitorTaskHandle);
+  //if(g_MonitorTaskHandle != NULL)
+  //vTaskStartScheduler();
+  //monitor_main(gtimerToRun);
 
 }

@@ -5,7 +5,7 @@
 #include "driver/gpio.h"
 #include "monitor.h"
 
-static TaskHandle_t adc_task_hndl;
+//static TaskHandle_t adc_task_hndl;
 static const char *TAG = "NRGY:MONITOR";
 
 #define RELAY_PIN GPIO_NUM_3 // Relay pin location
@@ -21,7 +21,11 @@ static bool example_adc_calibration_init(adc_unit_t unit, adc_atten_t atten, adc
 static void example_adc_calibration_deinit(adc_cali_handle_t handle);
 static float g_Current_consumed = 0;
 static float g_PresentConsumption = 0;
+adc_oneshot_unit_handle_t adc1_handle;
+extern TaskHandle_t g_MonitorTaskHandle;
+adc_cali_handle_t adc1_cali_handle = NULL;
 
+char TaskList[500];
 
 // Software timer callback, this timer can be used for ADC timer
 static void TimerExpiredActionCallback(TimerHandle_t xTimer)
@@ -37,18 +41,23 @@ static void TimerExpiredActionCallback(TimerHandle_t xTimer)
   // stop adc loop
   g_exit_adc_loop = 1;
   ESP_LOGI(TAG, "Power consumed : %.4f kWhr", g_Current_consumed/(float)3600);
-  // proceed for adc calculation
+  // proceed for task deletion
+  example_adc_calibration_deinit(adc1_cali_handle);
+  adc1_cali_handle = NULL;
+  vTaskDelete(g_MonitorTaskHandle);
+  g_MonitorTaskHandle = NULL;
 }
 
-void monitor_main(int timerToRun)
+void monitor_main(void * timerToRun)
 {
   static int adc_raw_avg;
   static int adc_voltage;
   int temp_value;
-  uint32_t time_to_run;
-  
-  time_to_run =  timerToRun * 60 * 1000; //make minutes to milli-seconds
+  uint32_t time_to_run = 10;
 
+  ESP_LOGI(TAG,"time to run : %d minutes", (int)timerToRun);
+  time_to_run =  ((int )timerToRun) * 60 * 1000; //make minutes to milli-seconds
+  
   // Create a timer for ADC to run till that time
   TimerHandle_t timerHandleADC;
 
@@ -79,10 +88,9 @@ void monitor_main(int timerToRun)
     g_replay_position = 1;
   }
 
-  adc_task_hndl = xTaskGetCurrentTaskHandle();
+  //adc_task_hndl = xTaskGetCurrentTaskHandle();
 
   //-------------ADC1 Init---------------//
-  adc_oneshot_unit_handle_t adc1_handle;
   adc_oneshot_unit_init_cfg_t init_config1 = {
       .unit_id = ADC_UNIT_1,
   };
@@ -95,7 +103,6 @@ void monitor_main(int timerToRun)
   };
   ESP_ERROR_CHECK(adc_oneshot_config_channel(adc1_handle, EXAMPLE_ADC1_CHAN0, &config));
 
-  adc_cali_handle_t adc1_cali_handle = NULL;
   bool do_calibration1 = example_adc_calibration_init(ADC_UNIT_1, ADC_ATTEN_DB_11, &adc1_cali_handle);
   //Calculate chip supply voltage at zero passing current
   if (!g_replay_position)
@@ -118,7 +125,9 @@ void monitor_main(int timerToRun)
     adc_raw_avg = adc_raw_avg / 5;
     ESP_ERROR_CHECK(adc_cali_raw_to_voltage(adc1_cali_handle, adc_raw_avg, &adc_voltage));
     //Record zero passing current reading
-    g_ACSZeroCurrentReading = (float)adc_voltage;
+   // g_ACSZeroCurrentReading = (float)adc_voltage;
+    // Presently rounding off for 500mVs as zero current voltage.
+    g_ACSZeroCurrentReading = (float)501;
     ESP_LOGI(TAG, "ACS supply voltage %.2f Volts", g_ACSZeroCurrentReading/(float)100);
   }
   // Turn relay on, now start actual operation
@@ -126,7 +135,8 @@ void monitor_main(int timerToRun)
   {
     TURN_ON_RELAY;
   }
-  while (!g_exit_adc_loop)
+  //while (!g_exit_adc_loop)
+  while(1)
   {
     //For stable reading, its recomendded to have capacitor with average reading from ADC.
     // Presently taking 5 ADC reading, can be improved further to achieve accuracy
@@ -169,7 +179,12 @@ void monitor_main(int timerToRun)
       ESP_LOGI(TAG,"Total Consumption %.2f kWs , Present consumption : %.2f Watts", g_Current_consumed, g_PresentConsumption);
     }
     #endif
-        vTaskDelay(1000);
+        vTaskDelay(999);
+        #if 0
+        vTaskList(TaskList);
+        ESP_LOGI(TAG,"%s", TaskList);
+        ESP_LOGI(TAG," Tatal Tasks : %d, total ticks since boot :%d ", uxTaskGetNumberOfTasks(), xTaskGetTickCount());
+        #endif
   }
 }
 

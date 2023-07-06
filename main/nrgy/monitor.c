@@ -144,7 +144,6 @@ void monitor_main(void)
     if (do_calibration1)
     {
       ESP_ERROR_CHECK(adc_cali_raw_to_voltage(adc1_cali_handle, adc_raw_avg, &adc_voltage));
-      adc_voltage = 650;
       if ((adc_voltage - ACSZeroCurrentReading) < 0)
       {
         PresentConsumption = 0;

@@ -144,15 +144,16 @@ void monitor_main(void)
     if (do_calibration1)
     {
       ESP_ERROR_CHECK(adc_cali_raw_to_voltage(adc1_cali_handle, adc_raw_avg, &adc_voltage));
+      adc_voltage = 650;
       if ((adc_voltage - ACSZeroCurrentReading) < 0)
       {
         PresentConsumption = 0;
       }
       else
       {
-        PresentConsumption = (230 * ((float)(adc_voltage - ACSZeroCurrentReading) / (float)200) / (float)1000);
+        PresentConsumption = (230 * ((float)(adc_voltage - ACSZeroCurrentReading) / (float)200));
       }
-      Current_consumed += PresentConsumption; //(230 * ((float)(adc_voltage  - ACSZeroCurrentReading)/(float)200) / (float)1000);
+      Current_consumed += PresentConsumption/ (float)1000; //(230 * ((float)(adc_voltage  - ACSZeroCurrentReading)/(float)200) / (float)1000);
        ESP_LOGI(TAG,"Total Consumption %.2f kWs , Present consumption : %.2f Watts", Current_consumed, PresentConsumption);
     }
     #endif

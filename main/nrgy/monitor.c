@@ -16,6 +16,7 @@ bool g_exit_adc_loop;
 
 #define EXAMPLE_ADC1_CHAN0          ADC_CHANNEL_2
 #define ADC_CALI_SCHEME_CURVE_FITTING_SUPPORTED 1
+#define ACS_PRESENCE_CHECK    1
 static float g_ACSZeroCurrentReading;
 static bool example_adc_calibration_init(adc_unit_t unit, adc_atten_t atten, adc_cali_handle_t *out_handle);
 static void example_adc_calibration_deinit(adc_cali_handle_t handle);
@@ -160,6 +161,13 @@ void monitor_main(void * timerToRun)
     if (do_calibration1)
     {
       ESP_ERROR_CHECK(adc_cali_raw_to_voltage(adc1_cali_handle, adc_raw_avg, &adc_voltage));
+#if ACS_PRESENCE_CHECK      
+      if( adc_voltage <= 430)
+      {
+        ESP_LOGI(TAG,"ACS not found");
+        break;
+      }
+#endif
       // Often adc output voltage fluctuates and if it's less than zero crossing current voltage (0.1 * Vadc)
       // Ensure if it's less, to ruound-off to zero consumption
       if ((adc_voltage - g_ACSZeroCurrentReading) < 0)

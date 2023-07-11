@@ -162,7 +162,7 @@ void monitor_main(void * timerToRun)
     {
       ESP_ERROR_CHECK(adc_cali_raw_to_voltage(adc1_cali_handle, adc_raw_avg, &adc_voltage));
 #if ACS_PRESENCE_CHECK      
-      if( adc_voltage <= 430)
+      if( adc_voltage <= 460)
       {
         ESP_LOGI(TAG,"ACS not found");
         break;
